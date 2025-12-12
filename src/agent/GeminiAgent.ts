@@ -11,14 +11,11 @@ import { createChildLogger } from "../logger.js";
 import { ToolRegistry, createToolRegistry } from "../tools/ToolRegistry.js";
 import type { Logger } from "winston";
 
-/** Maximum number of recursive tool call iterations to prevent infinite loops */
-const MAX_ITERATIONS = 25;
-
 /**
  * Configuration options for the GeminiAgent.
  */
 export interface GeminiAgentConfig {
-  /** Maximum number of tool call iterations (default: 25) */
+  /** Maximum number of tool call iterations (default: from config.MAX_ITERATIONS) */
   maxIterations?: number;
   /** The working directory for the agent's tools */
   workingDirectory?: string;
@@ -75,10 +72,10 @@ export class GeminiAgent {
    */
   constructor(agentConfig: GeminiAgentConfig = {}) {
     this._config = {
-      maxIterations: agentConfig.maxIterations ?? MAX_ITERATIONS,
+      maxIterations: agentConfig.maxIterations ?? config.MAX_ITERATIONS,
       workingDirectory: agentConfig.workingDirectory ?? config.WORKSPACE_ROOT,
       systemPrompt: agentConfig.systemPrompt ?? SYSTEM_PROMPT,
-      modelName: agentConfig.modelName ?? "gemini-2.0-flash",
+      modelName: agentConfig.modelName ?? config.GEMINI_MODEL,
     };
 
     this._client = new GoogleGenAI({ apiKey: config.GEMINI_API_KEY });

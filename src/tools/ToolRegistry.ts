@@ -3,6 +3,7 @@ import { toFunctionDeclaration, errorResult } from "../interfaces/Tool.js";
 import type { FunctionDeclaration } from "@google/genai";
 import { McpManager, mcpManager } from "./McpManager.js";
 import { createShellTool } from "./ShellTool.js";
+import { createVercelTool } from "./VercelTool.js";
 import { logger } from "../logger.js";
 import { config } from "../config.js";
 
@@ -198,12 +199,18 @@ export class ToolRegistry {
   /**
    * Registers internal tools that are not from MCP.
    *
-   * @param workingDirectory - The working directory for shell commands
+   * @param workingDirectory - The working directory for Vercel deployments
    */
   private _registerInternalTools(workingDirectory: string): void {
-    // Register the shell tool
-    const shellTool = createShellTool(workingDirectory);
+    // Register the shell tool (always uses config.WORKSPACE_ROOT)
+    const shellTool = createShellTool();
     this._registerTool(shellTool as unknown as AgentTool);
+
+    // Register Vercel deployment tool (if token configured)
+    const vercelTool = createVercelTool(workingDirectory);
+    if (vercelTool) {
+      this._registerTool(vercelTool as unknown as AgentTool);
+    }
   }
 }
 

@@ -1,0 +1,12 @@
+node_modules
+dist
+.git
+.env
+.env.local
+*.log
+npm-debug.log*
+.DS_Store
+coverage
+.nyc_output
+workspace
+workspace_data

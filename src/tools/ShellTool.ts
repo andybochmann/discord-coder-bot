@@ -9,8 +9,8 @@ import { Type } from "@google/genai";
 
 const execAsync = promisify(exec);
 
-/** Maximum execution time for shell commands in milliseconds (5 minutes for npx/install commands) */
-const COMMAND_TIMEOUT_MS = 300000;
+/** Maximum execution time for shell commands in milliseconds */
+const COMMAND_TIMEOUT_MS = 60000;
 
 /** Maximum output size in characters to prevent memory issues */
 const MAX_OUTPUT_SIZE = 50000;
@@ -28,17 +28,15 @@ interface ShellToolParams {
 /**
  * Creates the Shell tool for executing terminal commands.
  * This tool allows the agent to run npm, git, and other CLI commands.
+ * Commands are always executed within the configured workspace root.
  *
- * @param workingDirectory - The default working directory for commands
  * @returns An AgentTool for executing shell commands
  *
  * @example
- * const shellTool = createShellTool('/app/workspace/my-project');
+ * const shellTool = createShellTool();
  * const result = await shellTool.execute({ command: 'npm install' });
  */
-export function createShellTool(
-  workingDirectory: string
-): AgentTool<ShellToolParams> {
+export function createShellTool(): AgentTool<ShellToolParams> {
   return {
     name: "run_terminal_command",
     description:
@@ -61,8 +59,8 @@ export function createShellTool(
     },
     execute: async (args: ShellToolParams): Promise<ToolResult> => {
       // Use workspace directory if cwd is not provided or is empty
-      const effectiveCwd = args.cwd?.trim() || workingDirectory;
-      return executeShellCommand(args.command, effectiveCwd, workingDirectory);
+      const effectiveCwd = args.cwd?.trim() || "";
+      return executeShellCommand(args.command, effectiveCwd);
     },
   };
 }
@@ -71,27 +69,36 @@ export function createShellTool(
  * Executes a shell command safely within the workspace.
  *
  * @param command - The command to execute
- * @param cwd - The working directory for the command
- * @param workspaceRoot - The root workspace directory for resolving relative paths
+ * @param cwd - The working directory for the command (relative to workspace or absolute within workspace)
  * @returns The result of the command execution
  *
  * @example
- * const result = await executeShellCommand('npm install', '/app/workspace/project', '/app/workspace');
+ * const result = await executeShellCommand('npm install', 'project');
  */
 async function executeShellCommand(
   command: string,
-  cwd: string,
-  workspaceRoot: string
+  cwd: string
 ): Promise<ToolResult> {
-  // Resolve the cwd - if it's relative, resolve it relative to the workspace root
+  // Normalize workspace path
   const normalizedWorkspace = path.resolve(config.WORKSPACE_ROOT);
   let normalizedCwd: string;
 
-  if (path.isAbsolute(cwd)) {
-    normalizedCwd = path.resolve(cwd);
+  // Handle cwd resolution:
+  // - Empty or "." -> use workspace root
+  // - Relative paths -> resolve relative to workspace root
+  // - Absolute paths within workspace -> use as-is
+  // - Absolute paths outside workspace -> reject
+  const trimmedCwd = cwd.trim();
+
+  if (!trimmedCwd || trimmedCwd === "." || trimmedCwd === "./") {
+    // Use workspace root
+    normalizedCwd = normalizedWorkspace;
+  } else if (path.isAbsolute(trimmedCwd)) {
+    // Absolute path - check if it's within workspace
+    normalizedCwd = path.resolve(trimmedCwd);
   } else {
-    // Relative path - resolve relative to workspace root
-    normalizedCwd = path.resolve(workspaceRoot, cwd);
+    // Relative path - resolve relative to workspace root (not workspaceRoot param)
+    normalizedCwd = path.resolve(normalizedWorkspace, trimmedCwd);
   }
 
   // Validate the working directory is within the workspace
@@ -102,7 +109,8 @@ async function executeShellCommand(
     });
     return errorResult(
       `Working directory must be within the workspace: ${config.WORKSPACE_ROOT}. ` +
-        `Use a path relative to the workspace or leave cwd empty to use the default workspace directory.`
+        `The provided path "${cwd}" resolves to "${normalizedCwd}" which is outside the workspace. ` +
+        `Use a relative path like "." or "my-project" or leave cwd empty.`
     );
   }
 
@@ -131,6 +139,7 @@ async function executeShellCommand(
       cwd: normalizedCwd,
       timeout: COMMAND_TIMEOUT_MS,
       maxBuffer: MAX_OUTPUT_SIZE * 2,
+      shell: process.platform === "win32" ? "cmd.exe" : "/bin/bash",
       env: {
         ...process.env,
         // Ensure consistent environment
