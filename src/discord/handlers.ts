@@ -7,6 +7,10 @@ import type { Logger } from "winston";
 import { GeminiAgent } from "../agent/GeminiAgent.js";
 import { sessionManager } from "../agent/Session.js";
 
+import fs from "node:fs/promises";
+import path from "node:path";
+import { config } from "../config.js";
+
 /** Map of user ID to their active agent instance */
 const userAgents = new Map<string, GeminiAgent>();
 
@@ -262,6 +266,20 @@ export async function handleInteraction(
       await handleResetCommand(interaction, logger);
     } else if (commandName === "status") {
       await handleStatusCommand(interaction, logger);
+    } else if (commandName === "logs") {
+      await handleLogsCommand(interaction, logger);
+    } else if (commandName === "tree") {
+      await handleTreeCommand(interaction, logger);
+    } else if (commandName === "summarize") {
+      await handleSummarizeCommand(interaction, logger);
+    } else if (commandName === "list-projects") {
+      await handleListProjectsCommand(interaction, logger);
+    } else if (commandName === "new-project") {
+      await handleNewProjectCommand(interaction, logger);
+    } else if (commandName === "delete-project") {
+      await handleDeleteProjectCommand(interaction, logger);
+    } else if (commandName === "switch-project") {
+      await handleSwitchProjectCommand(interaction, logger);
     }
   } catch (error) {
     const errorMessage =
@@ -328,4 +346,234 @@ async function handleStatusCommand(
   ].join("\n");
 
   await interaction.reply({ content: status, ephemeral: true });
+}
+
+async function handleLogsCommand(
+  interaction: ChatInputCommandInteraction,
+  _logger: Logger
+) {
+  await interaction.reply({
+    content: "Logs are currently only available in the server console.",
+    ephemeral: true,
+  });
+}
+
+async function handleTreeCommand(
+  interaction: ChatInputCommandInteraction,
+  _logger: Logger
+) {
+  const userId = interaction.user.id;
+  const session = sessionManager.getSession(userId);
+
+  if (!session) {
+    await interaction.reply({ content: "No active session.", ephemeral: true });
+    return;
+  }
+
+  try {
+    const tree = await generateTree(session.workingDirectory);
+    const message = `**File Structure** (\`${session.workingDirectory}\`):\n\`\`\`\n${tree}\n\`\`\``;
+    await interaction.reply({ content: message, ephemeral: true });
+  } catch (error) {
+    await interaction.reply({
+      content: `Failed to generate tree: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`,
+      ephemeral: true,
+    });
+  }
+}
+
+async function generateTree(
+  dir: string,
+  prefix = "",
+  depth = 0
+): Promise<string> {
+  if (depth > 3) return "";
+
+  let output = "";
+  try {
+    const files = await fs.readdir(dir, { withFileTypes: true });
+    files.sort((a, b) => {
+      if (a.isDirectory() && !b.isDirectory()) return -1;
+      if (!a.isDirectory() && b.isDirectory()) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!file) continue;
+      if (file.name.startsWith(".") || file.name === "node_modules") continue;
+
+      const isLast = i === files.length - 1;
+      const marker = isLast ? "└── " : "├── ";
+      output += `${prefix}${marker}${file.name}\n`;
+
+      if (file.isDirectory()) {
+        const newPrefix = prefix + (isLast ? "    " : "│   ");
+        output += await generateTree(
+          path.join(dir, file.name),
+          newPrefix,
+          depth + 1
+        );
+      }
+    }
+  } catch {
+    return "";
+  }
+  return output;
+}
+
+async function handleSummarizeCommand(
+  interaction: ChatInputCommandInteraction,
+  _logger: Logger
+) {
+  const userId = interaction.user.id;
+  const agent = userAgents.get(userId);
+
+  if (!agent) {
+    await interaction.reply({ content: "No active agent.", ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply();
+
+  const result = await agent.execute(
+    "Please provide a concise summary of what we have accomplished in this session so far. Focus on created files and implemented features."
+  );
+
+  await interaction.editReply(result.response);
+}
+
+async function handleListProjectsCommand(
+  interaction: ChatInputCommandInteraction,
+  _logger: Logger
+) {
+  try {
+    const workspaceRoot = config.WORKSPACE_ROOT;
+    const entries = await fs.readdir(workspaceRoot, { withFileTypes: true });
+    const projects = entries
+      .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+      .map((e) => e.name);
+
+    if (projects.length === 0) {
+      await interaction.reply({
+        content: "No projects found in workspace.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const list = projects.map((p) => `- \`${p}\``).join("\n");
+    await interaction.reply({
+      content: `**Projects in Workspace**:\n${list}`,
+      ephemeral: true,
+    });
+  } catch (error) {
+    await interaction.reply({
+      content: `Failed to list projects: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`,
+      ephemeral: true,
+    });
+  }
+}
+
+async function handleNewProjectCommand(
+  interaction: ChatInputCommandInteraction,
+  logger: Logger
+) {
+  const name = interaction.options.getString("name", true);
+  const userId = interaction.user.id;
+
+  try {
+    const projectPath = sessionManager.createProjectPath(userId, name);
+    await fs.mkdir(projectPath, { recursive: true });
+
+    const agent = userAgents.get(userId);
+    if (agent) {
+      agent.setWorkingDirectory(projectPath);
+      agent.clearHistory();
+    }
+
+    await interaction.reply({
+      content: `✅ Created new project **${name}** and switched working directory to \`${projectPath}\`. Agent memory has been reset.`,
+      ephemeral: true,
+    });
+  } catch (error) {
+    logger.error("Failed to create project", { error });
+    await interaction.reply({
+      content: "Failed to create project. Please check the name and try again.",
+      ephemeral: true,
+    });
+  }
+}
+
+async function handleDeleteProjectCommand(
+  interaction: ChatInputCommandInteraction,
+  logger: Logger
+) {
+  const name = interaction.options.getString("name", true);
+  const workspaceRoot = config.WORKSPACE_ROOT;
+  const projectPath = path.join(workspaceRoot, name);
+
+  if (
+    !projectPath.startsWith(path.resolve(workspaceRoot)) ||
+    projectPath === path.resolve(workspaceRoot)
+  ) {
+    await interaction.reply({
+      content: "Invalid project name.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  try {
+    await fs.rm(projectPath, { recursive: true, force: true });
+    await interaction.reply({
+      content: `🗑️ Deleted project **${name}**.`,
+      ephemeral: true,
+    });
+  } catch (error) {
+    logger.error("Failed to delete project", { error });
+    await interaction.reply({
+      content: `Failed to delete project: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`,
+      ephemeral: true,
+    });
+  }
+}
+
+async function handleSwitchProjectCommand(
+  interaction: ChatInputCommandInteraction,
+  _logger: Logger
+) {
+  const name = interaction.options.getString("name", true);
+  const userId = interaction.user.id;
+  const workspaceRoot = config.WORKSPACE_ROOT;
+  const projectPath = path.join(workspaceRoot, name);
+
+  try {
+    await fs.access(projectPath);
+
+    sessionManager.setWorkingDirectory(userId, projectPath);
+    sessionManager.setProjectName(userId, name);
+
+    const agent = userAgents.get(userId);
+    if (agent) {
+      agent.setWorkingDirectory(projectPath);
+      agent.clearHistory();
+    }
+
+    await interaction.reply({
+      content: `📂 Switched to project **${name}**. Working directory is now \`${projectPath}\`. Agent memory has been reset.`,
+      ephemeral: true,
+    });
+  } catch {
+    await interaction.reply({
+      content: `Project **${name}** does not exist. Use \`/list-projects\` to see available projects.`,
+      ephemeral: true,
+    });
+  }
 }
