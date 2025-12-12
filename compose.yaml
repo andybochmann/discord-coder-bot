@@ -1,0 +1,17 @@
+services:
+  discord-agent:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Mount the current directory (code of the bot)
+      - .:/app
+      # Mount the actual workspace where the agent creates projects
+      # This allows you to see the code the agent writes on your host machine
+      - ./workspace_data:/app/workspace
+    environment:
+      - WORKSPACE_ROOT=/app/workspace
+    # Keep the container running
+    tty: true
+    
