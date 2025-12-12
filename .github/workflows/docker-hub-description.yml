@@ -6,7 +6,7 @@ on:
       - master
       - main
     paths:
-      - "README.md"
+      - "DOCKER_README.md"
       - ".github/workflows/docker-hub-description.yml"
   workflow_dispatch:
 
@@ -22,5 +22,5 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: andybochmann/discord-coder-bot
-          readme-filepath: ./README.md
+          readme-filepath: ./DOCKER_README.md
           short-description: "Autonomous Discord coding bot powered by Gemini"
