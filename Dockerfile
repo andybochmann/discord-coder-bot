@@ -24,8 +24,14 @@ RUN npm install
 # Copy source code
 COPY . .
 
+# Make entrypoint executable
+RUN chmod +x entrypoint.sh
+
 # Build the TypeScript code
 RUN npm run build
+
+# Use entrypoint to configure git before starting
+ENTRYPOINT ["./entrypoint.sh"]
 
 # Start the bot
 CMD ["npm", "start"]
