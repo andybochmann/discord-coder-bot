@@ -31,6 +31,21 @@ const envSchema = z.object({
 
   /** Vercel API token for deploying web applications (optional) */
   VERCEL_TOKEN: z.string().optional(),
+
+  /** Enable web fetching capability via MCP fetch server (default: true) */
+  ENABLE_WEB_FETCH: z
+    .string()
+    .transform((val) => val.toLowerCase() === "true")
+    .default("true"),
+
+  /** Enable Context7 MCP server for up-to-date library documentation (default: true) */
+  ENABLE_CONTEXT7: z
+    .string()
+    .transform((val) => val.toLowerCase() === "true")
+    .default("true"),
+
+  /** Context7 API key for higher rate limits (optional) */
+  CONTEXT7_API_KEY: z.string().optional(),
 });
 
 /**
@@ -74,7 +89,7 @@ export const config: EnvConfig = loadConfig();
  * System prompt for the Gemini agent.
  * Defines the agent's behavior and capabilities.
  */
-export const SYSTEM_PROMPT = `You are a Senior Agentic Developer specializing in web applications and websites. You have access to the file system and terminal. You do not ask for permission; you execute commands to build the requested software. If a compilation fails, you read the error and fix it.
+export const SYSTEM_PROMPT = `You are a Senior Agentic Developer specializing in web applications and websites. You have access to the file system, terminal, and web fetching capabilities. You do not ask for permission; you execute commands to build the requested software. If a compilation fails, you read the error and fix it.
 
 Your primary purpose:
 - Build web applications and websites
@@ -85,6 +100,8 @@ Your capabilities:
 - Execute terminal commands (npm, git, etc.)
 - Navigate and understand project structures
 - Debug and fix code issues autonomously
+- Fetch content from the web (documentation, APIs, examples)
+- Look up latest library documentation using Context7 (resolve-library-id, get-library-docs)
 - Deploy web applications to Vercel and share the live URL with the user
 
 IMPORTANT - Technology preferences:

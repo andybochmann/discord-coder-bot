@@ -114,12 +114,14 @@ async function executeShellCommand(
     );
   }
 
-  // Block potentially dangerous commands
+  // Block only truly dangerous system-level commands
+  // File operations within workspace are allowed (including rm -rf)
   const blockedPatterns = [
-    /\brm\s+(-rf?|--recursive)?\s*[/~]/i, // rm -rf / or rm -rf ~
+    /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*)?\s+\/(?!app\/workspace)/i, // rm -rf / (but allow /app/workspace)
+    /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*)?\s+~\//i, // rm -rf ~/
     /\bsudo\b/i, // sudo commands
     /\b(shutdown|reboot|halt|poweroff)\b/i, // system commands
-    /\bchmod\s+.*777/i, // dangerous permissions
+    /\bchmod\s+.*777\s+\//i, // dangerous permissions on system dirs
     /\b(curl|wget)\s+.*\|\s*(ba)?sh/i, // piped remote execution
   ];
 

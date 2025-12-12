@@ -7,8 +7,34 @@ import { logger } from "../logger.js";
 import { config } from "../config.js";
 
 /**
- * Manages the connection to the MCP filesystem server.
- * Spawns the server as a subprocess and communicates via stdio transport.
+ * Configuration for an MCP server connection.
+ */
+interface McpServerConfig {
+  /** Unique identifier for this server */
+  name: string;
+  /** Command to spawn the server */
+  command: string;
+  /** Arguments for the command */
+  args: string[];
+  /** Whether this server is enabled */
+  enabled: boolean;
+  /** Environment variables to pass to the server */
+  env?: Record<string, string>;
+}
+
+/**
+ * Tracks a connected MCP server instance.
+ */
+interface McpServerConnection {
+  config: McpServerConfig;
+  client: Client;
+  transport: StdioClientTransport;
+  process: ChildProcess | null;
+}
+
+/**
+ * Manages connections to multiple MCP servers.
+ * Spawns servers as subprocesses and communicates via stdio transport.
  *
  * @example
  * const mcpManager = new McpManager();
@@ -17,10 +43,9 @@ import { config } from "../config.js";
  * await mcpManager.disconnect();
  */
 export class McpManager {
-  private _client: Client | null = null;
-  private _transport: StdioClientTransport | null = null;
-  private _process: ChildProcess | null = null;
+  private _connections = new Map<string, McpServerConnection>();
   private _tools = new Map<string, AgentTool>();
+  private _toolToServer = new Map<string, string>();
   private _isConnected = false;
 
   /**
@@ -31,10 +56,45 @@ export class McpManager {
   }
 
   /**
-   * Connects to the MCP filesystem server.
-   * Spawns the server subprocess and initializes the client connection.
+   * Gets the list of MCP server configurations to connect to.
    *
-   * @throws {Error} If connection fails or server cannot be spawned
+   * @returns Array of server configurations
+   */
+  private _getServerConfigs(): McpServerConfig[] {
+    return [
+      {
+        name: "filesystem",
+        command: "npx",
+        args: [
+          "-y",
+          "@modelcontextprotocol/server-filesystem",
+          config.WORKSPACE_ROOT,
+        ],
+        enabled: true,
+      },
+      {
+        name: "fetch",
+        command: "uvx",
+        args: ["mcp-server-fetch"],
+        enabled: config.ENABLE_WEB_FETCH,
+      },
+      {
+        name: "context7",
+        command: "npx",
+        args: ["-y", "@upstash/context7-mcp@latest"],
+        enabled: config.ENABLE_CONTEXT7,
+        env: config.CONTEXT7_API_KEY
+          ? { CONTEXT7_API_KEY: config.CONTEXT7_API_KEY }
+          : undefined,
+      },
+    ];
+  }
+
+  /**
+   * Connects to all configured MCP servers.
+   * Spawns server subprocesses and initializes client connections.
+   *
+   * @throws {Error} If connection to required servers fails
    *
    * @example
    * const manager = new McpManager();
@@ -46,25 +106,80 @@ export class McpManager {
       return;
     }
 
+    const serverConfigs = this._getServerConfigs();
+    const enabledServers = serverConfigs.filter((s) => s.enabled);
+
+    logger.info("Starting MCP servers...", {
+      servers: enabledServers.map((s) => s.name),
+      workspaceRoot: config.WORKSPACE_ROOT,
+    });
+
+    const connectionPromises = enabledServers.map((serverConfig) =>
+      this._connectToServer(serverConfig)
+    );
+
+    const results = await Promise.allSettled(connectionPromises);
+
+    // Check results and log any failures
+    let successCount = 0;
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      const serverConfig = enabledServers[i];
+
+      if (!result || !serverConfig) continue;
+
+      if (result.status === "fulfilled") {
+        successCount++;
+      } else {
+        logger.error(`Failed to connect to MCP server: ${serverConfig.name}`, {
+          error: result.reason,
+        });
+      }
+    }
+
+    if (successCount === 0) {
+      throw new Error("Failed to connect to any MCP servers");
+    }
+
+    this._isConnected = true;
+    logger.info("MCP servers connected", {
+      connected: successCount,
+      total: enabledServers.length,
+    });
+  }
+
+  /**
+   * Connects to a single MCP server.
+   *
+   * @param serverConfig - Configuration for the server to connect to
+   */
+  private async _connectToServer(serverConfig: McpServerConfig): Promise<void> {
     try {
-      logger.info("Starting MCP filesystem server...", {
-        workspaceRoot: config.WORKSPACE_ROOT,
-      });
+      logger.info(`Starting MCP server: ${serverConfig.name}...`);
+
+      // Build environment variables for the server
+      // Filter out undefined values from process.env and merge with server-specific env
+      const baseEnv: Record<string, string> = {};
+      for (const [key, value] of Object.entries(process.env)) {
+        if (value !== undefined) {
+          baseEnv[key] = value;
+        }
+      }
+      const serverEnv = serverConfig.env
+        ? { ...baseEnv, ...serverConfig.env }
+        : undefined;
 
       // Create the stdio transport that spawns the MCP server
-      this._transport = new StdioClientTransport({
-        command: "npx",
-        args: [
-          "-y",
-          "@modelcontextprotocol/server-filesystem",
-          config.WORKSPACE_ROOT,
-        ],
+      const transport = new StdioClientTransport({
+        command: serverConfig.command,
+        args: serverConfig.args,
+        env: serverEnv,
       });
 
       // Create the MCP client
-      this._client = new Client(
+      const client = new Client(
         {
-          name: "discord-coder-bot",
+          name: `discord-coder-bot-${serverConfig.name}`,
           version: "1.0.0",
         },
         {
@@ -73,63 +188,74 @@ export class McpManager {
       );
 
       // Connect to the server
-      await this._client.connect(this._transport);
-      this._isConnected = true;
+      await client.connect(transport);
 
-      logger.info("MCP filesystem server connected successfully");
+      // Store the connection
+      this._connections.set(serverConfig.name, {
+        config: serverConfig,
+        client,
+        transport,
+        process: null,
+      });
 
-      // Discover available tools from the server
-      await this._discoverTools();
+      logger.info(`MCP server connected: ${serverConfig.name}`);
+
+      // Discover available tools from this server
+      await this._discoverToolsFromServer(serverConfig.name, client);
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Unknown error occurred";
-      logger.error("Failed to connect to MCP server", { error: message });
-      await this.disconnect();
-      throw new Error(`Failed to connect to MCP server: ${message}`);
+      logger.error(`Failed to connect to MCP server: ${serverConfig.name}`, {
+        error: message,
+      });
+      throw new Error(
+        `Failed to connect to MCP server ${serverConfig.name}: ${message}`
+      );
     }
   }
 
   /**
-   * Disconnects from the MCP filesystem server.
-   * Cleans up the client, transport, and subprocess.
+   * Disconnects from all MCP servers.
+   * Cleans up clients, transports, and subprocesses.
    *
    * @example
    * await manager.disconnect();
    */
   public async disconnect(): Promise<void> {
-    logger.info("Disconnecting from MCP server...");
+    logger.info("Disconnecting from MCP servers...");
 
-    if (this._client) {
-      try {
-        await this._client.close();
-      } catch (error) {
-        logger.warn("Error closing MCP client", {
-          error: error instanceof Error ? error.message : "Unknown",
-        });
+    const disconnectPromises = Array.from(this._connections.entries()).map(
+      async ([name, connection]) => {
+        try {
+          await connection.client.close();
+        } catch (error) {
+          logger.warn(`Error closing MCP client: ${name}`, {
+            error: error instanceof Error ? error.message : "Unknown",
+          });
+        }
+
+        try {
+          await connection.transport.close();
+        } catch (error) {
+          logger.warn(`Error closing MCP transport: ${name}`, {
+            error: error instanceof Error ? error.message : "Unknown",
+          });
+        }
+
+        if (connection.process) {
+          connection.process.kill();
+        }
       }
-      this._client = null;
-    }
+    );
 
-    if (this._transport) {
-      try {
-        await this._transport.close();
-      } catch (error) {
-        logger.warn("Error closing MCP transport", {
-          error: error instanceof Error ? error.message : "Unknown",
-        });
-      }
-      this._transport = null;
-    }
+    await Promise.allSettled(disconnectPromises);
 
-    if (this._process) {
-      this._process.kill();
-      this._process = null;
-    }
-
+    this._connections.clear();
     this._tools.clear();
+    this._toolToServer.clear();
     this._isConnected = false;
 
-    logger.info("MCP server disconnected");
+    logger.info("MCP servers disconnected");
   }
 
   /**
@@ -159,8 +285,8 @@ export class McpManager {
     toolName: string,
     args: Record<string, unknown>
   ): Promise<ToolResult> {
-    if (!this._isConnected || !this._client) {
-      return errorResult("MCP server is not connected");
+    if (!this._isConnected) {
+      return errorResult("MCP servers are not connected");
     }
 
     const tool = this._tools.get(toolName);
@@ -168,10 +294,21 @@ export class McpManager {
       return errorResult(`Tool not found: ${toolName}`);
     }
 
-    try {
-      logger.debug("Executing MCP tool", { toolName, args });
+    // Find which server has this tool
+    const serverName = this._toolToServer.get(toolName);
+    if (!serverName) {
+      return errorResult(`No server found for tool: ${toolName}`);
+    }
 
-      const result = await this._client.callTool({
+    const connection = this._connections.get(serverName);
+    if (!connection) {
+      return errorResult(`Server not connected: ${serverName}`);
+    }
+
+    try {
+      logger.debug("Executing MCP tool", { toolName, serverName, args });
+
+      const result = await connection.client.callTool({
         name: toolName,
         arguments: args,
       });
@@ -200,39 +337,121 @@ export class McpManager {
   }
 
   /**
-   * Discovers available tools from the MCP server and creates AgentTool wrappers.
+   * Discovers available tools from a specific MCP server and creates AgentTool wrappers.
+   *
+   * @param serverName - The name of the server to discover tools from
+   * @param client - The MCP client for this server
    */
-  private async _discoverTools(): Promise<void> {
-    if (!this._client) {
-      throw new Error("Client not initialized");
-    }
-
+  private async _discoverToolsFromServer(
+    serverName: string,
+    client: Client
+  ): Promise<void> {
     try {
-      const toolsResult = await this._client.listTools();
+      const toolsResult = await client.listTools();
 
-      logger.info("Discovered MCP tools", {
+      logger.info(`Discovered tools from MCP server: ${serverName}`, {
         count: toolsResult.tools.length,
         tools: toolsResult.tools.map((t) => t.name),
       });
 
       for (const mcpTool of toolsResult.tools) {
+        // Sanitize the input schema for Gemini compatibility
+        const sanitizedSchema = this._sanitizeSchemaForGemini(
+          mcpTool.inputSchema as Record<string, unknown>
+        );
+
         const agentTool: AgentTool = {
           name: mcpTool.name,
           description: mcpTool.description ?? `MCP tool: ${mcpTool.name}`,
-          parameters: mcpTool.inputSchema as unknown as AgentTool["parameters"],
+          parameters: sanitizedSchema as unknown as AgentTool["parameters"],
           execute: async (args: Record<string, unknown>) => {
             return this.executeTool(mcpTool.name, args);
           },
         };
 
         this._tools.set(mcpTool.name, agentTool);
+        this._toolToServer.set(mcpTool.name, serverName);
       }
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Unknown error occurred";
-      logger.error("Failed to discover MCP tools", { error: message });
-      throw new Error(`Failed to discover MCP tools: ${message}`);
+      logger.error(`Failed to discover tools from MCP server: ${serverName}`, {
+        error: message,
+      });
+      throw new Error(
+        `Failed to discover tools from ${serverName}: ${message}`
+      );
     }
+  }
+
+  /**
+   * Sanitizes a JSON Schema for Gemini API compatibility.
+   * Removes unsupported properties like exclusiveMinimum, exclusiveMaximum, etc.
+   *
+   * @param schema - The original JSON Schema from MCP
+   * @returns A sanitized schema compatible with Gemini
+   */
+  private _sanitizeSchemaForGemini(
+    schema: Record<string, unknown>
+  ): Record<string, unknown> {
+    // Properties not supported by Gemini's function calling
+    const unsupportedProperties = [
+      "exclusiveMinimum",
+      "exclusiveMaximum",
+      "$schema",
+      "additionalProperties",
+      "patternProperties",
+      "allOf",
+      "anyOf",
+      "oneOf",
+      "not",
+      "if",
+      "then",
+      "else",
+      "dependentSchemas",
+      "dependentRequired",
+      "unevaluatedProperties",
+      "unevaluatedItems",
+      "contentEncoding",
+      "contentMediaType",
+      "contentSchema",
+      "default",
+      "deprecated",
+      "readOnly",
+      "writeOnly",
+      "examples",
+      "$id",
+      "$ref",
+      "$defs",
+      "definitions",
+      "$comment",
+      "$anchor",
+      "$dynamicRef",
+      "$dynamicAnchor",
+    ];
+
+    const sanitize = (obj: unknown): unknown => {
+      if (obj === null || typeof obj !== "object") {
+        return obj;
+      }
+
+      if (Array.isArray(obj)) {
+        return obj.map(sanitize);
+      }
+
+      const sanitized: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(obj)) {
+        // Skip unsupported properties
+        if (unsupportedProperties.includes(key)) {
+          continue;
+        }
+        // Recursively sanitize nested objects
+        sanitized[key] = sanitize(value);
+      }
+      return sanitized;
+    };
+
+    return sanitize(schema) as Record<string, unknown>;
   }
 }
 
