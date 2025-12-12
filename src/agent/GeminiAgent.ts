@@ -241,6 +241,26 @@ export class GeminiAgent {
 
     this._logger.info("Executing agent", { promptLength: prompt.length });
 
+    // Inject working directory context if history is empty (new session or after reset)
+    if (this._conversationHistory.length === 0) {
+      this._conversationHistory.push({
+        role: "user",
+        parts: [
+          {
+            text: `[System Context: You are currently working in the project directory: ${this._config.workingDirectory}. All file operations and commands should be relative to this directory unless otherwise specified.]`,
+          },
+        ],
+      });
+      this._conversationHistory.push({
+        role: "model",
+        parts: [
+          {
+            text: `Understood. I'm now working in the project directory: ${this._config.workingDirectory}. I'll use this as my base for all file operations and commands. How can I help you with this project?`,
+          },
+        ],
+      });
+    }
+
     // Add user message to history
     this._conversationHistory.push({
       role: "user",
