@@ -12,14 +12,4 @@ export const commands = [
     .setName("status")
     .setDescription("Shows the current status of the agent")
     .toJSON(),
-  new SlashCommandBuilder()
-    .setName("config")
-    .setDescription("Configure the agent settings")
-    .addStringOption((option) =>
-      option
-        .setName("directory")
-        .setDescription("Set the working directory")
-        .setRequired(false)
-    )
-    .toJSON(),
 ];

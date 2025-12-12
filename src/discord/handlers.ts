@@ -262,8 +262,6 @@ export async function handleInteraction(
       await handleResetCommand(interaction, logger);
     } else if (commandName === "status") {
       await handleStatusCommand(interaction, logger);
-    } else if (commandName === "config") {
-      await handleConfigCommand(interaction, logger);
     }
   } catch (error) {
     const errorMessage =
@@ -330,32 +328,4 @@ async function handleStatusCommand(
   ].join("\n");
 
   await interaction.reply({ content: status, ephemeral: true });
-}
-
-async function handleConfigCommand(
-  interaction: ChatInputCommandInteraction,
-  _logger: Logger
-) {
-  const userId = interaction.user.id;
-  const directory = interaction.options.getString("directory");
-
-  if (directory) {
-    const session = sessionManager.getOrCreateSession(userId);
-    session.workingDirectory = directory;
-
-    const agent = userAgents.get(userId);
-    if (agent) {
-      agent.setWorkingDirectory(directory);
-    }
-
-    await interaction.reply({
-      content: `✅ Working directory set to: \`${directory}\``,
-      ephemeral: true,
-    });
-  } else {
-    await interaction.reply({
-      content: "Please provide a directory.",
-      ephemeral: true,
-    });
-  }
 }
