@@ -3,7 +3,10 @@ import { toFunctionDeclaration, errorResult } from "../interfaces/Tool.js";
 import type { FunctionDeclaration } from "@google/genai";
 import { McpManager, mcpManager } from "./McpManager.js";
 import { createShellTool } from "./ShellTool.js";
-import { createVercelTool } from "./VercelTool.js";
+import {
+  createVercelTool,
+  createDeleteVercelProjectTool,
+} from "./VercelTool.js";
 import { logger } from "../logger.js";
 import { config } from "../config.js";
 
@@ -210,6 +213,12 @@ export class ToolRegistry {
     const vercelTool = createVercelTool(workingDirectory);
     if (vercelTool) {
       this._registerTool(vercelTool as unknown as AgentTool);
+    }
+
+    // Register Vercel delete project tool (if token configured)
+    const deleteVercelTool = createDeleteVercelProjectTool(workingDirectory);
+    if (deleteVercelTool) {
+      this._registerTool(deleteVercelTool as unknown as AgentTool);
     }
   }
 }

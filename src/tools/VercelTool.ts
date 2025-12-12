@@ -9,6 +9,9 @@ import { Type } from "@google/genai";
 
 const execAsync = promisify(exec);
 
+/** Base URL for Vercel API */
+const VERCEL_API_BASE = "https://api.vercel.com";
+
 /** Maximum execution time for Vercel deployments (10 minutes) */
 const DEPLOY_TIMEOUT_MS = 600000;
 
@@ -25,6 +28,14 @@ interface VercelToolParams {
   production?: boolean;
   /** Optional project name (auto-generated if not provided) */
   projectName?: string;
+}
+
+/**
+ * Parameters for the delete_vercel_project tool.
+ */
+interface DeleteVercelProjectParams {
+  /** The name or ID of the Vercel project to delete */
+  projectNameOrId: string;
 }
 
 /**
@@ -279,4 +290,144 @@ function truncateOutput(output: string, maxLength: number): string {
     output.substring(0, maxLength) +
     `\n... [Output truncated, ${output.length - maxLength} characters omitted]`
   );
+}
+
+/**
+ * Creates the Vercel delete project tool for removing projects from Vercel.
+ * Returns null if no Vercel token is configured.
+ *
+ * @param workingDirectory - The default working directory (not used but kept for consistency)
+ * @returns An AgentTool for deleting Vercel projects, or null if no token configured
+ *
+ * @example
+ * const deleteVercelTool = createDeleteVercelProjectTool('/app/workspace');
+ * if (deleteVercelTool) {
+ *   const result = await deleteVercelTool.execute({ projectNameOrId: 'my-project' });
+ * }
+ */
+export function createDeleteVercelProjectTool(
+  _workingDirectory: string
+): AgentTool<DeleteVercelProjectParams> | null {
+  if (!config.VERCEL_TOKEN) {
+    logger.info("Vercel token not configured, delete project tool disabled");
+    return null;
+  }
+
+  return {
+    name: "delete_vercel_project",
+    description:
+      "Delete a project from Vercel. This permanently removes the project and all its deployments. " +
+      "Use the project name or ID to identify which project to delete. " +
+      "WARNING: This action is irreversible.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        projectNameOrId: {
+          type: Type.STRING,
+          description:
+            "The name or ID of the Vercel project to delete. This is typically the project name shown in the Vercel dashboard.",
+        },
+      },
+      required: ["projectNameOrId"],
+    },
+    execute: async (args: DeleteVercelProjectParams): Promise<ToolResult> => {
+      return deleteVercelProject(args);
+    },
+  };
+}
+
+/**
+ * Deletes a project from Vercel using the Vercel API.
+ *
+ * @param args - Delete parameters containing the project name or ID
+ * @returns The result of the deletion operation
+ */
+async function deleteVercelProject(
+  args: DeleteVercelProjectParams
+): Promise<ToolResult> {
+  const { projectNameOrId } = args;
+
+  if (!projectNameOrId || projectNameOrId.trim() === "") {
+    return errorResult("Project name or ID is required");
+  }
+
+  const trimmedProjectNameOrId = projectNameOrId.trim();
+
+  logger.info("Deleting Vercel project", {
+    projectNameOrId: trimmedProjectNameOrId,
+  });
+
+  try {
+    const vercelToken = config.VERCEL_TOKEN ?? "";
+    const url = `${VERCEL_API_BASE}/v9/projects/${encodeURIComponent(
+      trimmedProjectNameOrId
+    )}`;
+
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${vercelToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (response.status === 204 || response.status === 200) {
+      logger.info("Vercel project deleted successfully", {
+        projectNameOrId: trimmedProjectNameOrId,
+      });
+
+      return successResult({
+        message: `Successfully deleted project: ${trimmedProjectNameOrId}`,
+        projectNameOrId: trimmedProjectNameOrId,
+      });
+    }
+
+    if (response.status === 404) {
+      logger.warn("Vercel project not found", {
+        projectNameOrId: trimmedProjectNameOrId,
+      });
+      return errorResult(
+        `Project not found: ${trimmedProjectNameOrId}. Please verify the project name or ID is correct.`
+      );
+    }
+
+    if (response.status === 403) {
+      logger.error("Forbidden to delete Vercel project", {
+        projectNameOrId: trimmedProjectNameOrId,
+      });
+      return errorResult(
+        `Access denied: You don't have permission to delete project '${trimmedProjectNameOrId}'. ` +
+          "Ensure your Vercel token has the necessary permissions."
+      );
+    }
+
+    // Handle other error responses
+    let errorBody: string;
+    try {
+      const errorJson = (await response.json()) as {
+        error?: { message?: string };
+      };
+      errorBody = errorJson.error?.message ?? JSON.stringify(errorJson);
+    } catch {
+      errorBody = await response.text();
+    }
+
+    logger.error("Vercel project deletion failed", {
+      projectNameOrId: trimmedProjectNameOrId,
+      status: response.status,
+      error: errorBody,
+    });
+
+    return errorResult(
+      `Failed to delete project '${trimmedProjectNameOrId}': ${errorBody} (HTTP ${response.status})`
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    logger.error("Error deleting Vercel project", {
+      projectNameOrId: trimmedProjectNameOrId,
+      error: message,
+    });
+
+    return errorResult(`Failed to delete project: ${message}`);
+  }
 }
