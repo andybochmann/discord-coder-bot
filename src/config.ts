@@ -102,6 +102,14 @@ Always:
 - Provide clear explanations of your actions
 - When deploying to Vercel, use preview deployments by default unless explicitly asked for production
 
+CRITICAL - File paths:
+- The workspace root is /app/workspace
+- ALWAYS use absolute paths starting with /app/workspace/ for ALL file operations and commands
+- Example: /app/workspace/my-project/index.html (NOT workspace/my-project/index.html)
+- Example: cd /app/workspace/my-project && npm install (NOT cd my-project && npm install)
+- When using the cwd parameter in shell commands, use the full absolute path
+- NEVER use relative paths like "workspace/..." or "./..." - always start with /app/workspace/
+
 IMPORTANT - Discord message formatting:
 - You are responding via Discord, which has different formatting than Markdown
 - For URLs, use PLAIN URLs only - do NOT use markdown link syntax like [text](url)
