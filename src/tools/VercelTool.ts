@@ -28,6 +28,26 @@ interface VercelToolParams {
   production?: boolean;
   /** Optional project name (auto-generated if not provided) */
   projectName?: string;
+  /** Skip cleanup of old deployments (default: false - will delete old deployments) */
+  skipCleanup?: boolean;
+}
+
+/**
+ * Vercel deployment object from the API.
+ */
+interface VercelDeployment {
+  uid: string;
+  name: string;
+  url: string;
+  state: string;
+  created: number;
+}
+
+/**
+ * Vercel deployments list response from the API.
+ */
+interface VercelDeploymentsResponse {
+  deployments: VercelDeployment[];
 }
 
 /**
@@ -83,6 +103,11 @@ export function createVercelTool(
           description:
             "Optional name for the Vercel project. If not provided, will be auto-generated from the directory name.",
         },
+        skipCleanup: {
+          type: Type.BOOLEAN,
+          description:
+            "Set to true to skip deleting old deployments before deploying. Default is false (old deployments will be deleted to keep things clean).",
+        },
       },
       required: ["projectPath"],
     },
@@ -103,7 +128,12 @@ async function deployToVercel(
   args: VercelToolParams,
   workingDirectory: string
 ): Promise<ToolResult> {
-  const { projectPath, production = false, projectName } = args;
+  const {
+    projectPath,
+    production = false,
+    projectName,
+    skipCleanup = false,
+  } = args;
 
   // Resolve the project path
   const normalizedWorkspace = path.resolve(config.WORKSPACE_ROOT);
@@ -126,6 +156,29 @@ async function deployToVercel(
       `Project path must be within the workspace: ${config.WORKSPACE_ROOT}. ` +
         `Use a path relative to the workspace.`
     );
+  }
+
+  // Determine the effective project name for cleanup
+  const effectiveProjectName = projectName
+    ? projectName
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, "-")
+        .replace(/-+/g, "-")
+        .replace(/^-|-$/g, "")
+    : path
+        .basename(resolvedPath)
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, "-");
+
+  // Clean up old deployments before deploying (unless skipped)
+  if (!skipCleanup && effectiveProjectName) {
+    const cleanupResult = await cleanupOldDeployments(effectiveProjectName);
+    if (cleanupResult.deletedCount > 0) {
+      logger.info("Cleaned up old deployments", {
+        projectName: effectiveProjectName,
+        deletedCount: cleanupResult.deletedCount,
+      });
+    }
   }
 
   // Build the Vercel command
@@ -290,6 +343,129 @@ function truncateOutput(output: string, maxLength: number): string {
     output.substring(0, maxLength) +
     `\n... [Output truncated, ${output.length - maxLength} characters omitted]`
   );
+}
+
+/**
+ * Result of cleaning up old deployments.
+ */
+interface CleanupResult {
+  deletedCount: number;
+  errors: string[];
+}
+
+/**
+ * Lists all deployments for a project from the Vercel API.
+ *
+ * @param projectName - The name of the project to list deployments for
+ * @returns Array of deployment objects
+ */
+async function listProjectDeployments(
+  projectName: string
+): Promise<VercelDeployment[]> {
+  const vercelToken = config.VERCEL_TOKEN ?? "";
+  const url = `${VERCEL_API_BASE}/v6/deployments?projectId=${encodeURIComponent(
+    projectName
+  )}&limit=100`;
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${vercelToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      logger.warn("Failed to list deployments", {
+        projectName,
+        status: response.status,
+      });
+      return [];
+    }
+
+    const data = (await response.json()) as VercelDeploymentsResponse;
+    return data.deployments ?? [];
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    logger.warn("Error listing deployments", { projectName, error: message });
+    return [];
+  }
+}
+
+/**
+ * Deletes a single deployment from Vercel.
+ *
+ * @param deploymentId - The ID of the deployment to delete
+ * @returns True if deletion was successful
+ */
+async function deleteDeployment(deploymentId: string): Promise<boolean> {
+  const vercelToken = config.VERCEL_TOKEN ?? "";
+  const url = `${VERCEL_API_BASE}/v13/deployments/${encodeURIComponent(
+    deploymentId
+  )}`;
+
+  try {
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${vercelToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (response.status === 200 || response.status === 204) {
+      return true;
+    }
+
+    logger.debug("Failed to delete deployment", {
+      deploymentId,
+      status: response.status,
+    });
+    return false;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    logger.debug("Error deleting deployment", { deploymentId, error: message });
+    return false;
+  }
+}
+
+/**
+ * Cleans up old deployments for a project before deploying a new one.
+ *
+ * @param projectName - The name of the project to clean up
+ * @returns Result containing count of deleted deployments and any errors
+ */
+async function cleanupOldDeployments(
+  projectName: string
+): Promise<CleanupResult> {
+  const result: CleanupResult = { deletedCount: 0, errors: [] };
+
+  logger.info("Cleaning up old deployments", { projectName });
+
+  const deployments = await listProjectDeployments(projectName);
+
+  if (deployments.length === 0) {
+    logger.debug("No existing deployments found", { projectName });
+    return result;
+  }
+
+  logger.info("Found existing deployments to clean up", {
+    projectName,
+    count: deployments.length,
+  });
+
+  // Delete all deployments (we'll create a fresh one after)
+  for (const deployment of deployments) {
+    const success = await deleteDeployment(deployment.uid);
+    if (success) {
+      result.deletedCount++;
+    } else {
+      result.errors.push(`Failed to delete deployment ${deployment.uid}`);
+    }
+  }
+
+  return result;
 }
 
 /**
