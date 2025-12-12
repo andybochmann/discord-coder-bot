@@ -12,6 +12,9 @@ const envSchema = z.object({
   /** Discord bot token for authentication */
   DISCORD_TOKEN: z.string().min(1, "DISCORD_TOKEN is required"),
 
+  /** Discord Application ID (Client ID) for slash commands */
+  DISCORD_CLIENT_ID: z.string().min(1, "DISCORD_CLIENT_ID is required"),
+
   /** Google AI Studio API key for Gemini */
   GEMINI_API_KEY: z.string().min(1, "GEMINI_API_KEY is required"),
 

@@ -7,6 +7,7 @@ import {
   createVercelTool,
   createDeleteVercelProjectTool,
 } from "./VercelTool.js";
+import { createResetTool } from "./ResetTool.js";
 import { logger } from "../logger.js";
 import { config } from "../config.js";
 
@@ -51,7 +52,8 @@ export class ToolRegistry {
    * await registry.initialize('/app/workspace/my-project');
    */
   public async initialize(
-    workingDirectory: string = config.WORKSPACE_ROOT
+    workingDirectory: string = config.WORKSPACE_ROOT,
+    onReset?: () => void
   ): Promise<void> {
     if (this._isInitialized) {
       logger.warn("ToolRegistry already initialized");
@@ -71,7 +73,7 @@ export class ToolRegistry {
       }
 
       // Register internal tools
-      this._registerInternalTools(workingDirectory);
+      this._registerInternalTools(workingDirectory, onReset);
 
       this._isInitialized = true;
       logger.info("Tool registry initialized", {
@@ -203,8 +205,12 @@ export class ToolRegistry {
    * Registers internal tools that are not from MCP.
    *
    * @param workingDirectory - The working directory for Vercel deployments
+   * @param onReset - Optional callback for reset tool
    */
-  private _registerInternalTools(workingDirectory: string): void {
+  private _registerInternalTools(
+    workingDirectory: string,
+    onReset?: () => void
+  ): void {
     // Register the shell tool (always uses config.WORKSPACE_ROOT)
     const shellTool = createShellTool();
     this._registerTool(shellTool as unknown as AgentTool);
@@ -220,6 +226,11 @@ export class ToolRegistry {
     if (deleteVercelTool) {
       this._registerTool(deleteVercelTool as unknown as AgentTool);
     }
+
+    // Register Reset tool (if callback provided)
+    if (onReset) {
+      this._registerTool(createResetTool(onReset) as unknown as AgentTool);
+    }
   }
 }
 
@@ -227,15 +238,17 @@ export class ToolRegistry {
  * Creates and initializes a tool registry for the specified working directory.
  *
  * @param workingDirectory - The working directory for tools
+ * @param onReset - Optional callback for reset tool
  * @returns An initialized ToolRegistry instance
  *
  * @example
  * const registry = await createToolRegistry('/app/workspace/project');
  */
 export async function createToolRegistry(
-  workingDirectory: string = config.WORKSPACE_ROOT
+  workingDirectory: string = config.WORKSPACE_ROOT,
+  onReset?: () => void
 ): Promise<ToolRegistry> {
   const registry = new ToolRegistry();
-  await registry.initialize(workingDirectory);
+  await registry.initialize(workingDirectory, onReset);
   return registry;
 }

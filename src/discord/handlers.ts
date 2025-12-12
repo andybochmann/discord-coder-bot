@@ -1,4 +1,8 @@
-import type { Message } from "discord.js";
+import type {
+  Message,
+  Interaction,
+  ChatInputCommandInteraction,
+} from "discord.js";
 import type { Logger } from "winston";
 import { GeminiAgent } from "../agent/GeminiAgent.js";
 import { sessionManager } from "../agent/Session.js";
@@ -233,5 +237,124 @@ export async function clearAllAgents(): Promise<void> {
   for (const [userId, agent] of userAgents) {
     await agent.shutdown();
     userAgents.delete(userId);
+  }
+}
+
+/**
+ * Handles slash command interactions.
+ *
+ * @param interaction - The interaction event
+ * @param logger - The logger instance
+ */
+export async function handleInteraction(
+  interaction: Interaction,
+  logger: Logger
+): Promise<void> {
+  if (!interaction.isChatInputCommand()) return;
+
+  const { commandName } = interaction;
+  const userId = interaction.user.id;
+
+  logger.info("Processing slash command", { commandName, userId });
+
+  try {
+    if (commandName === "reset") {
+      await handleResetCommand(interaction, logger);
+    } else if (commandName === "status") {
+      await handleStatusCommand(interaction, logger);
+    } else if (commandName === "config") {
+      await handleConfigCommand(interaction, logger);
+    }
+  } catch (error) {
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
+    logger.error("Failed to handle command", {
+      commandName,
+      error: errorMessage,
+    });
+
+    if (interaction.replied || interaction.deferred) {
+      await interaction.followUp({
+        content: `Error: ${errorMessage}`,
+        ephemeral: true,
+      });
+    } else {
+      await interaction.reply({
+        content: `Error: ${errorMessage}`,
+        ephemeral: true,
+      });
+    }
+  }
+}
+
+async function handleResetCommand(
+  interaction: ChatInputCommandInteraction,
+  _logger: Logger
+) {
+  const userId = interaction.user.id;
+  const agent = userAgents.get(userId);
+
+  if (agent) {
+    agent.clearHistory();
+    await interaction.reply({
+      content: "✅ Conversation history cleared.",
+      ephemeral: true,
+    });
+  } else {
+    await interaction.reply({
+      content: "No active session found to reset.",
+      ephemeral: true,
+    });
+  }
+}
+
+async function handleStatusCommand(
+  interaction: ChatInputCommandInteraction,
+  _logger: Logger
+) {
+  const userId = interaction.user.id;
+  const session = sessionManager.getSession(userId);
+  const agent = userAgents.get(userId);
+
+  if (!session) {
+    await interaction.reply({ content: "No active session.", ephemeral: true });
+    return;
+  }
+
+  const status = [
+    `**User**: <@${userId}>`,
+    `**Working Directory**: \`${session.workingDirectory}\``,
+    `**Agent Initialized**: ${agent?.isInitialized ? "Yes" : "No"}`,
+    `**History Size**: ${agent?.conversationHistory.length ?? 0} messages`,
+  ].join("\n");
+
+  await interaction.reply({ content: status, ephemeral: true });
+}
+
+async function handleConfigCommand(
+  interaction: ChatInputCommandInteraction,
+  _logger: Logger
+) {
+  const userId = interaction.user.id;
+  const directory = interaction.options.getString("directory");
+
+  if (directory) {
+    const session = sessionManager.getOrCreateSession(userId);
+    session.workingDirectory = directory;
+
+    const agent = userAgents.get(userId);
+    if (agent) {
+      agent.setWorkingDirectory(directory);
+    }
+
+    await interaction.reply({
+      content: `✅ Working directory set to: \`${directory}\``,
+      ephemeral: true,
+    });
+  } else {
+    await interaction.reply({
+      content: "Please provide a directory.",
+      ephemeral: true,
+    });
   }
 }

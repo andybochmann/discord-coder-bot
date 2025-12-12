@@ -4,10 +4,13 @@ import {
   Partials,
   Events,
   type Message,
+  REST,
+  Routes,
 } from "discord.js";
 import { config } from "../config.js";
 import { createChildLogger } from "../logger.js";
-import { setupMessageHandler } from "./handlers.js";
+import { setupMessageHandler, handleInteraction } from "./handlers.js";
+import { commands } from "./commands.js";
 import type { Logger } from "winston";
 
 /**
@@ -71,10 +74,34 @@ export class DiscordBot {
     try {
       await this._client.login(config.DISCORD_TOKEN);
       this._logger.info("Discord bot login successful");
+
+      await this._registerCommands();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       this._logger.error("Failed to start Discord bot", { error: message });
       throw new Error(`Failed to start Discord bot: ${message}`);
+    }
+  }
+
+  /**
+   * Registers slash commands with Discord.
+   */
+  private async _registerCommands(): Promise<void> {
+    try {
+      this._logger.info("Registering slash commands...");
+
+      const rest = new REST({ version: "10" }).setToken(config.DISCORD_TOKEN);
+
+      await rest.put(Routes.applicationCommands(config.DISCORD_CLIENT_ID), {
+        body: commands,
+      });
+
+      this._logger.info("Slash commands registered successfully");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      this._logger.error("Failed to register slash commands", {
+        error: message,
+      });
     }
   }
 
@@ -124,6 +151,11 @@ export class DiscordBot {
           // Ignore reply errors
         }
       }
+    });
+
+    // Interaction Create event
+    this._client.on(Events.InteractionCreate, (interaction) => {
+      handleInteraction(interaction, this._logger);
     });
 
     // Error event

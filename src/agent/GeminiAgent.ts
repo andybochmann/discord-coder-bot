@@ -117,7 +117,8 @@ export class GeminiAgent {
 
     try {
       this._toolRegistry = await createToolRegistry(
-        this._config.workingDirectory
+        this._config.workingDirectory,
+        () => this.clearHistory()
       );
       this._isInitialized = true;
       this._logger.info("Gemini Agent initialized successfully");
@@ -157,6 +158,53 @@ export class GeminiAgent {
   public clearHistory(): void {
     this._conversationHistory = [];
     this._logger.debug("Conversation history cleared");
+  }
+
+  /**
+   * Trims the conversation history to stay within token limits.
+   * Uses a simple character count approximation (4 chars ~= 1 token).
+   * Keeps the most recent messages.
+   */
+  private _trimHistory(): void {
+    const MAX_TOKENS = 100000; // Conservative limit
+    const CHARS_PER_TOKEN = 4;
+    const MAX_CHARS = MAX_TOKENS * CHARS_PER_TOKEN;
+
+    let currentChars = 0;
+    const preservedHistory: Content[] = [];
+
+    // Iterate backwards to keep most recent messages
+    for (let i = this._conversationHistory.length - 1; i >= 0; i--) {
+      const content = this._conversationHistory[i];
+      if (!content) continue;
+
+      // Estimate size based on JSON string length
+      const contentSize = JSON.stringify(content).length;
+
+      if (currentChars + contentSize > MAX_CHARS) {
+        if (preservedHistory.length > 0) {
+          this._logger.info("Trimming conversation history", {
+            removedMessages: i + 1,
+            newSize: preservedHistory.length,
+          });
+        }
+        break;
+      }
+
+      currentChars += contentSize;
+      preservedHistory.unshift(content);
+    }
+
+    // Ensure we don't start with a function response without a call
+    // (Simple heuristic: if first message is 'function', remove it)
+    while (
+      preservedHistory.length > 0 &&
+      preservedHistory[0]?.role === "function"
+    ) {
+      preservedHistory.shift();
+    }
+
+    this._conversationHistory = preservedHistory;
   }
 
   /**
@@ -212,6 +260,9 @@ export class GeminiAgent {
         iterations++;
         this._logger.debug("Agent iteration", { iteration: iterations });
 
+        // Ensure history is within limits before generating content
+        this._trimHistory();
+
         // Generate content from Gemini
         const response = await this._generateContent(functionDeclarations);
 
@@ -244,6 +295,7 @@ export class GeminiAgent {
 
         // Execute function calls and collect results
         const functionResponses: Part[] = [];
+        let historyWasCleared = false;
 
         for (const functionCall of functionCalls) {
           const toolName = functionCall.name ?? "unknown";
@@ -260,12 +312,27 @@ export class GeminiAgent {
             functionCall.args as Record<string, unknown>
           );
 
+          // Check if history was cleared during tool execution (e.g. reset_memory)
+          if (this._conversationHistory.length === 0) {
+            historyWasCleared = true;
+          }
+
           functionResponses.push({
             functionResponse: {
               name: functionCall.name,
               response: result,
             },
           });
+        }
+
+        if (historyWasCleared) {
+          this._logger.info("History cleared during execution, stopping loop");
+          return {
+            success: true,
+            response: "Memory cleared successfully. Starting fresh.",
+            toolCallCount,
+            toolsUsed: [...new Set(toolsUsed)],
+          };
         }
 
         // Add assistant's function call to history
