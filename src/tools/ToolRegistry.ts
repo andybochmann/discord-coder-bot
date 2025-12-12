@@ -8,6 +8,7 @@ import {
   createDeleteVercelProjectTool,
 } from "./VercelTool.js";
 import { createResetTool } from "./ResetTool.js";
+import { createGitHistoryTool } from "./GitTool.js";
 import { logger } from "../logger.js";
 import { config } from "../config.js";
 
@@ -231,6 +232,11 @@ export class ToolRegistry {
     if (onReset) {
       this._registerTool(createResetTool(onReset) as unknown as AgentTool);
     }
+
+    // Register Git History tool
+    this._registerTool(
+      createGitHistoryTool(workingDirectory) as unknown as AgentTool
+    );
   }
 }
 

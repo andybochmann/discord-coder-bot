@@ -10,6 +10,7 @@ import { sessionManager } from "../agent/Session.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "../config.js";
+import { getGitLog } from "../tools/GitTool.js";
 
 /** Map of user ID to their active agent instance */
 const userAgents = new Map<string, GeminiAgent>();
@@ -280,6 +281,8 @@ export async function handleInteraction(
       await handleDeleteProjectCommand(interaction, logger);
     } else if (commandName === "switch-project") {
       await handleSwitchProjectCommand(interaction, logger);
+    } else if (commandName === "git-log") {
+      await handleGitLogCommand(interaction, logger);
     }
   } catch (error) {
     const errorMessage =
@@ -575,5 +578,40 @@ async function handleSwitchProjectCommand(
       content: `Project **${name}** does not exist. Use \`/list-projects\` to see available projects.`,
       ephemeral: true,
     });
+  }
+}
+
+async function handleGitLogCommand(
+  interaction: ChatInputCommandInteraction,
+  _logger: Logger
+) {
+  const userId = interaction.user.id;
+  const session = sessionManager.getSession(userId);
+
+  if (!session) {
+    await interaction.reply({ content: "No active session.", ephemeral: true });
+    return;
+  }
+
+  const count = interaction.options.getInteger("count") ?? 10;
+
+  await interaction.deferReply();
+
+  try {
+    const log = await getGitLog(session.workingDirectory, count);
+    const message = `**Git History** (\`${session.workingDirectory}\`):\n\`\`\`\n${log}\n\`\`\``;
+
+    // Truncate if too long for Discord
+    if (message.length > 2000) {
+      await interaction.editReply(message.substring(0, 1990) + "...\`\`\`");
+    } else {
+      await interaction.editReply(message);
+    }
+  } catch (error) {
+    await interaction.editReply(
+      `Failed to get git log: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`
+    );
   }
 }

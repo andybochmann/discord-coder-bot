@@ -58,4 +58,14 @@ export const commands = [
         .setRequired(true)
     )
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName("git-log")
+    .setDescription("Shows recent git commits for the current project")
+    .addIntegerOption((option) =>
+      option
+        .setName("count")
+        .setDescription("Number of commits to show (default: 10)")
+        .setRequired(false)
+    )
+    .toJSON(),
 ];
