@@ -88,15 +88,23 @@ export class DiscordBot {
    */
   private async _registerCommands(): Promise<void> {
     try {
-      this._logger.info("Registering slash commands...");
+      this._logger.info("Registering slash commands...", {
+        clientId: config.DISCORD_CLIENT_ID,
+        commandCount: commands.length,
+      });
 
       const rest = new REST({ version: "10" }).setToken(config.DISCORD_TOKEN);
 
-      await rest.put(Routes.applicationCommands(config.DISCORD_CLIENT_ID), {
-        body: commands,
-      });
+      const data = (await rest.put(
+        Routes.applicationCommands(config.DISCORD_CLIENT_ID),
+        {
+          body: commands,
+        }
+      )) as unknown[];
 
-      this._logger.info("Slash commands registered successfully");
+      this._logger.info("Slash commands registered successfully", {
+        registeredCount: data.length,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       this._logger.error("Failed to register slash commands", {

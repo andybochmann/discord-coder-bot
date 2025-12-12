@@ -301,8 +301,9 @@ async function handleResetCommand(
       ephemeral: true,
     });
   } else {
+    // Even if no agent exists, we can confirm the "reset" since the state is effectively empty
     await interaction.reply({
-      content: "No active session found to reset.",
+      content: "✅ No active session found, but you are ready to start fresh.",
       ephemeral: true,
     });
   }
