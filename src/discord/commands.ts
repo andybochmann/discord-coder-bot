@@ -68,4 +68,18 @@ export const commands = [
         .setRequired(false)
     )
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName("planning")
+    .setDescription(
+      "Toggle planning mode - agent will create a plan before executing"
+    )
+    .addBooleanOption((option) =>
+      option
+        .setName("enabled")
+        .setDescription(
+          "Enable or disable planning mode (toggles if not specified)"
+        )
+        .setRequired(false)
+    )
+    .toJSON(),
 ];

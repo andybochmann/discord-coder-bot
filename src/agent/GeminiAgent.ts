@@ -9,6 +9,11 @@ import {
 import { config, SYSTEM_PROMPT } from "../config.js";
 import { createChildLogger } from "../logger.js";
 import { ToolRegistry, createToolRegistry } from "../tools/ToolRegistry.js";
+import {
+  isPlanningRequest,
+  isPlanApproval,
+  PLANNING_INSTRUCTIONS,
+} from "./PlanningUtils.js";
 import type { Logger } from "winston";
 
 /**
@@ -58,6 +63,7 @@ export class GeminiAgent {
   private _config: Required<GeminiAgentConfig>;
   private _logger: Logger;
   private _isInitialized = false;
+  private _isPlanningMode = false;
 
   /**
    * Creates a new GeminiAgent instance.
@@ -87,6 +93,22 @@ export class GeminiAgent {
    */
   public get isInitialized(): boolean {
     return this._isInitialized;
+  }
+
+  /**
+   * Gets whether the agent is in planning mode (awaiting approval).
+   */
+  public get isPlanningMode(): boolean {
+    return this._isPlanningMode;
+  }
+
+  /**
+   * Sets the planning mode state.
+   * Used to manually exit planning mode after plan approval.
+   */
+  public set isPlanningMode(value: boolean) {
+    this._isPlanningMode = value;
+    this._logger.debug("Planning mode changed", { isPlanningMode: value });
   }
 
   /**
@@ -241,6 +263,23 @@ export class GeminiAgent {
 
     this._logger.info("Executing agent", { promptLength: prompt.length });
 
+    // Check if user is requesting a planning phase
+    const wantsPlan = isPlanningRequest(prompt);
+    if (wantsPlan && !this._isPlanningMode) {
+      this._isPlanningMode = true;
+      this._logger.info("Planning mode activated", {
+        prompt: prompt.substring(0, 100),
+      });
+    }
+
+    // Check if user is approving a plan (only relevant if we're in planning mode)
+    if (this._isPlanningMode && !wantsPlan && isPlanApproval(prompt)) {
+      this._isPlanningMode = false;
+      this._logger.info(
+        "Plan approved, exiting planning mode to begin execution"
+      );
+    }
+
     // Inject working directory context if history is empty (new session or after reset)
     if (this._conversationHistory.length === 0) {
       this._conversationHistory.push({
@@ -261,10 +300,17 @@ export class GeminiAgent {
       });
     }
 
+    // Prepare the prompt with planning instructions if in planning mode
+    let effectivePrompt = prompt;
+    if (this._isPlanningMode && wantsPlan) {
+      effectivePrompt = `${prompt}\n\n${PLANNING_INSTRUCTIONS}`;
+      this._logger.debug("Injected planning instructions into prompt");
+    }
+
     // Add user message to history
     this._conversationHistory.push({
       role: "user",
-      parts: [{ text: prompt }],
+      parts: [{ text: effectivePrompt }],
     });
 
     const toolsUsed: string[] = [];
@@ -289,6 +335,45 @@ export class GeminiAgent {
         // Check if response contains function calls
         const functionCalls = this._extractFunctionCalls(response);
 
+        // In planning mode, don't execute tools - just return the plan
+        if (this._isPlanningMode && functionCalls.length > 0) {
+          const textResponse = this._extractTextResponse(response);
+
+          // If there's a text response with the plan, return it
+          if (textResponse.trim()) {
+            this._conversationHistory.push({
+              role: "model",
+              parts: [{ text: textResponse }],
+            });
+
+            this._logger.info(
+              "Planning mode - returning plan without executing tools",
+              {
+                iterations,
+                blockedToolCalls: functionCalls.length,
+              }
+            );
+
+            return {
+              success: true,
+              response: textResponse,
+              toolCallCount: 0,
+              toolsUsed: [],
+            };
+          }
+
+          // If the model only wants to call tools, ask it to provide a plan first
+          this._conversationHistory.push({
+            role: "model",
+            parts: [
+              {
+                text: "Let me create a detailed plan for you first before starting implementation.",
+              },
+            ],
+          });
+          continue;
+        }
+
         if (functionCalls.length === 0) {
           // No function calls - extract text response and return
           const textResponse = this._extractTextResponse(response);
@@ -298,6 +383,12 @@ export class GeminiAgent {
             role: "model",
             parts: [{ text: textResponse }],
           });
+
+          // If we're in planning mode and this is a plan response, stay in planning mode
+          // The user needs to approve before we continue
+          if (this._isPlanningMode) {
+            this._logger.info("Plan delivered, awaiting user approval");
+          }
 
           this._logger.info("Agent execution completed", {
             iterations,

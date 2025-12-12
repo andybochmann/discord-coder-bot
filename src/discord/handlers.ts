@@ -283,6 +283,8 @@ export async function handleInteraction(
       await handleSwitchProjectCommand(interaction, logger);
     } else if (commandName === "git-log") {
       await handleGitLogCommand(interaction, logger);
+    } else if (commandName === "planning") {
+      await handlePlanningCommand(interaction, logger);
     }
   } catch (error) {
     const errorMessage =
@@ -345,6 +347,9 @@ async function handleStatusCommand(
     `**User**: <@${userId}>`,
     `**Working Directory**: \`${session.workingDirectory}\``,
     `**Agent Initialized**: ${agent?.isInitialized ? "Yes" : "No"}`,
+    `**Planning Mode**: ${
+      agent?.isPlanningMode ? "🟢 Active (awaiting approval)" : "⚫ Inactive"
+    }`,
     `**History Size**: ${agent?.conversationHistory.length ?? 0} messages`,
   ].join("\n");
 
@@ -603,7 +608,7 @@ async function handleGitLogCommand(
 
     // Truncate if too long for Discord
     if (message.length > 2000) {
-      await interaction.editReply(message.substring(0, 1990) + "...\`\`\`");
+      await interaction.editReply(message.substring(0, 1990) + "...```");
     } else {
       await interaction.editReply(message);
     }
@@ -613,5 +618,42 @@ async function handleGitLogCommand(
         error instanceof Error ? error.message : "Unknown error"
       }`
     );
+  }
+}
+
+async function handlePlanningCommand(
+  interaction: ChatInputCommandInteraction,
+  _logger: Logger
+) {
+  const userId = interaction.user.id;
+  const agent = userAgents.get(userId);
+  const explicitValue = interaction.options.getBoolean("enabled");
+
+  if (!agent) {
+    await interaction.reply({
+      content:
+        "No active agent. Planning mode will activate when you request a plan with phrases like 'plan this first' or 'create a plan'.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  // Toggle or set to explicit value
+  const newValue =
+    explicitValue !== null ? explicitValue : !agent.isPlanningMode;
+  agent.isPlanningMode = newValue;
+
+  if (newValue) {
+    await interaction.reply({
+      content:
+        "🟢 **Planning Mode Enabled**\nThe agent will create a detailed plan before executing any code. Approve the plan or provide feedback before execution begins.\n\nTo disable: `/planning enabled:False` or say 'proceed' after reviewing a plan.",
+      ephemeral: true,
+    });
+  } else {
+    await interaction.reply({
+      content:
+        "⚫ **Planning Mode Disabled**\nThe agent will execute tasks directly without creating a plan first.\n\nYou can still request a plan for specific tasks by saying 'plan this first' or 'create a plan'.",
+      ephemeral: true,
+    });
   }
 }
