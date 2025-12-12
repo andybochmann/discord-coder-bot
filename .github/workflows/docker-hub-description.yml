@@ -23,4 +23,4 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: andybochmann/discord-coder-bot
           readme-filepath: ./README.md
-          short-description: "Autonomous Discord coding bot powered by Gemini 2.0 Flash and MCP"
+          short-description: "Autonomous Discord coding bot powered by Gemini"
