@@ -59,7 +59,7 @@ An autonomous Discord bot powered by **Google Gemini 2.0 Flash** and the **Model
 ### 1. Clone and Install
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/andybochmann/discord-coder-bot.git
 cd discord-coder-bot
 npm install
 ```

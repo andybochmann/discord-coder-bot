@@ -21,6 +21,10 @@
     "agent",
     "ai"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/andybochmann/discord-coder-bot.git"
+  },
   "license": "MIT",
   "engines": {
     "node": ">=20.0.0"
