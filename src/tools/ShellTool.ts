@@ -10,7 +10,7 @@ import { Type } from "@google/genai";
 const execAsync = promisify(exec);
 
 /** Maximum execution time for shell commands in milliseconds */
-const COMMAND_TIMEOUT_MS = 60000;
+const COMMAND_TIMEOUT_MS = config.COMMAND_TIMEOUT_MS;
 
 /** Maximum output size in characters to prevent memory issues */
 const MAX_OUTPUT_SIZE = 50000;

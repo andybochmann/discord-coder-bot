@@ -24,6 +24,9 @@ const envSchema = z.object({
   /** Maximum number of tool call iterations before stopping (default: 50) */
   MAX_ITERATIONS: z.coerce.number().int().positive().default(50),
 
+  /** Maximum execution time for shell commands in milliseconds (default: 60000) */
+  COMMAND_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
+
   /** Root directory where the bot is allowed to work/create projects */
   WORKSPACE_ROOT: z.string().min(1, "WORKSPACE_ROOT is required"),
 
