@@ -229,36 +229,43 @@ async function deployToVercel(
     // Parse the deployment URL from stdout
     // Vercel CLI outputs the URL as the last line
     const lines = stdout.trim().split("\n");
-    const url = lines[lines.length - 1]?.trim();
-
-    if (url && url.startsWith("https://")) {
-      logger.info("Vercel deployment successful", { url, production });
-
-      return successResult({
-        url,
-        production,
-        message: production
-          ? `Successfully deployed to production: ${url}`
-          : `Successfully deployed preview: ${url}`,
-        stdout: truncateOutput(stdout.trim(), MAX_OUTPUT_SIZE),
-      });
-    }
+    let deploymentUrl = lines[lines.length - 1]?.trim();
 
     // If we couldn't find a URL in the last line, try to find it anywhere
-    const urlMatch = stdout.match(/https:\/\/[^\s]+\.vercel\.app[^\s]*/);
-    if (urlMatch) {
-      const foundUrl = urlMatch[0];
+    if (!deploymentUrl || !deploymentUrl.startsWith("https://")) {
+      const urlMatch = stdout.match(/https:\/\/[^\s]+\.vercel\.app[^\s]*/);
+      deploymentUrl = urlMatch ? urlMatch[0] : undefined;
+    }
+
+    if (deploymentUrl && deploymentUrl.startsWith("https://")) {
       logger.info("Vercel deployment successful", {
-        url: foundUrl,
+        url: deploymentUrl,
         production,
       });
 
+      // For production deployments, fetch the actual production URL (alias)
+      let productionUrl: string | undefined;
+      if (production) {
+        productionUrl = await getProductionUrl(
+          effectiveProjectName,
+          deploymentUrl
+        );
+        if (productionUrl) {
+          logger.info("Found production URL", { productionUrl, deploymentUrl });
+        }
+      }
+
+      const finalUrl =
+        production && productionUrl ? productionUrl : deploymentUrl;
+
       return successResult({
-        url: foundUrl,
+        url: finalUrl,
+        deploymentUrl, // Always include the unique deployment URL
+        productionUrl: productionUrl || undefined,
         production,
         message: production
-          ? `Successfully deployed to production: ${foundUrl}`
-          : `Successfully deployed preview: ${foundUrl}`,
+          ? `Successfully deployed to production: ${finalUrl}`
+          : `Successfully deployed preview: ${finalUrl}`,
         stdout: truncateOutput(stdout.trim(), MAX_OUTPUT_SIZE),
       });
     }
@@ -325,6 +332,77 @@ async function deployToVercel(
     }
 
     return errorResult("Unknown error during deployment");
+  }
+}
+
+/**
+ * Gets the production URL for a project after a production deployment.
+ * Fetches the deployment details and extracts the production alias.
+ *
+ * @param projectName - The name of the project
+ * @param deploymentUrl - The unique deployment URL from CLI output
+ * @returns The production URL (alias) or undefined if not found
+ */
+async function getProductionUrl(
+  projectName: string,
+  deploymentUrl: string
+): Promise<string | undefined> {
+  const vercelToken = config.VERCEL_TOKEN ?? "";
+
+  // Extract deployment ID from URL (e.g., "https://project-abc123.vercel.app" -> "project-abc123")
+  const urlMatch = deploymentUrl.match(/https:\/\/([^.]+)\.vercel\.app/);
+  const deploymentId = urlMatch ? urlMatch[1] : undefined;
+
+  if (!deploymentId) {
+    // Fallback: construct production URL from project name
+    return `https://${projectName}.vercel.app`;
+  }
+
+  try {
+    // Try to get deployment details to find the alias
+    const response = await fetch(
+      `${VERCEL_API_BASE}/v13/deployments/${deploymentId}`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${vercelToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    if (response.ok) {
+      const data = (await response.json()) as {
+        alias?: string[];
+        aliasAssigned?: boolean;
+        name?: string;
+      };
+
+      // Look for the production alias (typically projectname.vercel.app)
+      if (data.alias && data.alias.length > 0) {
+        // Find the shortest alias (usually the production one)
+        const productionAlias = data.alias.reduce((shortest, current) =>
+          current.length < shortest.length ? current : shortest
+        );
+        return `https://${productionAlias}`;
+      }
+
+      // Fallback to project name
+      if (data.name) {
+        return `https://${data.name}.vercel.app`;
+      }
+    }
+
+    // Fallback: construct from project name
+    return `https://${projectName}.vercel.app`;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    logger.debug("Error fetching production URL", {
+      projectName,
+      error: message,
+    });
+    // Fallback: construct from project name
+    return `https://${projectName}.vercel.app`;
   }
 }
 
